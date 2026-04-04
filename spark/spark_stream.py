@@ -36,16 +36,42 @@ df = spark.readStream \
 schema = StructType([
     StructField("timestamp", DoubleType()),
     StructField("sensor", StringType()),
-    StructField("value", MapType(StringType(), DoubleType()))
+    StructField("value", StringType())
 ])
 
-# Parse JSON
-parsed = df.selectExpr("CAST(value AS STRING)") \
-    .select(from_json(col("value"), schema).alias("data")) \
-    .select("data.*")
+
+raw = df.selectExpr("CAST(value AS STRING) as json_str")
+
+parsed = raw.select(
+    from_json(col("json_str"), schema).alias("data")
+).select("data.*")
+
+value_parsed = parsed.withColumn(
+    "value_map",
+    from_json(col("value"), MapType(StringType(), StringType()))
+)
+
+# Flatten map
+flattened = value_parsed.select(
+    "timestamp",
+    "sensor",
+    col("value_map").getItem("strain_microstrain").cast("double").alias("strain"),
+    col("value_map").getItem("temperature_C").cast("double").alias("temp"),
+    col("value_map").getItem("snr_dB").cast("double").alias("snr"),
+    col("value_map").getItem("accel_x (g)").cast("double").alias("accel_x"),
+    col("value_map").getItem("accel_y (g)").cast("double").alias("accel_y"),
+    col("value_map").getItem("accel_z (g)").cast("double").alias("accel_z")
+)
+
+# Debug print stream
+flattened.writeStream \
+    .format("console") \
+    .outputMode("append") \
+    .option("truncate", False) \
+    .start()
 
 # Print stream
-query = parsed.writeStream \
+query = flattened.writeStream \
     .foreach(send_to_model) \
     .start()
 
