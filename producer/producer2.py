@@ -3,6 +3,7 @@ import time
 import json
 
 from kafka import KafkaProducer
+from ml_model import OnlineAnomalyModel
 
 from Common.message_bus import MessageBus
 
@@ -26,6 +27,8 @@ from Common.flight_phase import FlightPhaseController
 # -----------------------------
 def run_sensor(update_method, stop_event, phase_controller, sensor_name, producer):
 
+    model = OnlineAnomalyModel()
+
     with phase_controller.start_barrier:
         phase_controller.ready_sensors += 1
         phase_controller.start_barrier.notify_all()
@@ -40,10 +43,30 @@ def run_sensor(update_method, stop_event, phase_controller, sensor_name, produce
         try:
             result = update_method()
 
+            features = {}
+
+            if isinstance(result, dict):
+                for k, v in result.items():
+                    try:
+                        features[k] = float(v)
+                    except (ValueError, TypeError):
+                        # skip non-numeric fields like "status", "locked", etc.
+                        continue
+            else:
+                try:
+                    features["value"] = float(result)
+                except (ValueError, TypeError):
+                    features = {}
+
+            model.update(features)
+
+            prediction = model.predict(features)
+
             entry = {
                 "timestamp": time.time(),
                 "sensor": sensor_name,
-                "value": result
+                "value": result,
+                "prediction": float(prediction)
             }
 
             # Send to Kafka
