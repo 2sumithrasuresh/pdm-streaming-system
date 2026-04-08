@@ -49,7 +49,8 @@ df = spark.readStream \
 schema = StructType([
     StructField("timestamp", DoubleType()),
     StructField("sensor", StringType()),
-    StructField("value", StringType())
+    StructField("value", StringType()),
+    StructField("prediction", DoubleType())
 ])
 
 # -----------------------------
@@ -72,6 +73,7 @@ value_parsed = parsed.withColumn(
 flattened = value_parsed.select(
     "timestamp",
     "sensor",
+    "prediction",
 
     # Accelerometer
     col("value_map").getItem("accel_x (g)").cast("double").alias("accel_x"),
@@ -190,6 +192,9 @@ bucketed = with_time.groupBy(
     max(when(col("sensor") == "wingtip_node", col("node_accel"))).alias("node_accel"),
     max(when(col("sensor") == "wingtip_node", col("node_deflection"))).alias("node_deflection"),
     max(when(col("sensor") == "wingtip_node", col("node_strain"))).alias("node_strain"),
+    
+    # Prediction
+    max("prediction").alias("prediction")
 )
 
 # -----------------------------
