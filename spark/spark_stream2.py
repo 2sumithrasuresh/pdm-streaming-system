@@ -16,25 +16,6 @@ spark = SparkSession.builder \
 spark.sparkContext.setLogLevel("WARN")
 
 # -----------------------------
-# MODEL CALL
-# -----------------------------
-def send_to_model(row):
-    try:
-        response = requests.post(
-            "http://model-api:8000/predict",
-            json=row.asDict()
-        )
-        prediction = response.json()["prediction"]
-
-        print("Prediction:", prediction)
-
-        if prediction > 0.8:
-            print("⚠️ ALERT!")
-
-    except Exception as e:
-        print("Error:", e)
-
-# -----------------------------
 # READ FROM KAFKA
 # -----------------------------
 df = spark.readStream \
@@ -205,20 +186,17 @@ final_df = bucketed.select(
     "*"
 ).drop("window")
 
-# -----------------------------
-# DEBUG OUTPUT
-# -----------------------------
-final_df.writeStream \
+console_query = final_df.writeStream \
     .format("console") \
     .option("truncate", False) \
     .outputMode("append") \
     .start()
 
-# -----------------------------
-# SEND TO MODEL
-# -----------------------------
-query = final_df.writeStream \
-    .foreach(send_to_model) \
+parquet_query = final_df.writeStream \
+    .format("parquet") \
+    .option("path", "/data/training") \
+    .option("checkpointLocation", "/data/checkpoints") \
+    .outputMode("append") \
     .start()
 
-query.awaitTermination()
+spark.streams.awaitAnyTermination()
