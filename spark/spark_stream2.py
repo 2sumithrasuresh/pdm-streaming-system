@@ -1,7 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, from_json, window, to_timestamp,
-    when, max
+    when, max, avg
 )
 from pyspark.sql.types import *
 import requests
@@ -22,6 +22,8 @@ df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "kafka:9092") \
     .option("subscribe", "sensor-data") \
+    .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", "false") \
     .load()
 
 # -----------------------------
@@ -178,6 +180,46 @@ bucketed = with_time.groupBy(
     max("prediction").alias("prediction")
 )
 
+def make_json_safe(data):
+    safe = {}
+
+    for k, v in data.items():
+        if v is None:
+            safe[k] = None
+        elif hasattr(v, "isoformat"):   # datetime
+            safe[k] = v.isoformat()
+        elif isinstance(v, (int, float, str, bool)):
+            safe[k] = v
+        else:
+            safe[k] = str(v)  # fallback (VERY IMPORTANT)
+
+    return safe
+
+def send_model_updates(df, epoch_id):
+    rows = df.collect()
+
+    from kafka import KafkaProducer
+    import json
+
+    producer = KafkaProducer(
+        bootstrap_servers='kafka:9092',
+        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    )
+
+    for row in rows:
+        raw_data = row.asDict()
+        
+        data = make_json_safe(raw_data)
+
+        message = {
+            "sensor": "accelerometer",  # temp (we'll refine later)
+            "features": data
+        }
+
+        producer.send("model-updates", message)
+
+    producer.flush()
+
 # -----------------------------
 # FINAL OUTPUT
 # -----------------------------
@@ -197,6 +239,11 @@ parquet_query = final_df.writeStream \
     .option("path", "/data/training") \
     .option("checkpointLocation", "/data/checkpoints") \
     .outputMode("append") \
+    .start()
+
+model_update_query = bucketed.writeStream \
+    .outputMode("append") \
+    .foreachBatch(send_model_updates) \
     .start()
 
 spark.streams.awaitAnyTermination()
